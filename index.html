@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <title>GPS Logger Pro - WhatsApp Edition</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        html, body { margin:0; padding:0; height: 100%; width: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; background: #333; }
+        
+        #start-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 5000;
+            display: flex; justify-content: center; align-items: center;
+        }
+        .btn-start {
+            padding: 20px 40px; font-size: 20px; font-weight: bold;
+            background: #007bff; color: white; border: none; border-radius: 50px;
+            box-shadow: 0 0 20px rgba(0,123,255,0.5); cursor: pointer;
+        }
+
+        .status-bar {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            z-index: 2000; background: rgba(0,0,0,0.85); color: #00ff00;
+            padding: 10px 15px; border-radius: 10px; font-size: 12px;
+            text-align: center; border: 1px solid #444; pointer-events: none;
+            min-width: 250px; line-height: 1.4;
+        }
+
+        .controls {
+            position: absolute; bottom: 30px; right: 15px; z-index: 2000;
+            display: flex; flex-direction: column; gap: 10px;
+        }
+
+        .btn {
+            padding: 15px; border-radius: 12px; border: none; font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5); cursor: pointer; font-size: 14px;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .btn-wa { background: #25D366; color: white; }
+        .btn-download { background: #007bff; color: white; }
+        .btn-view { background: #6f42c1; color: white; } /* Ungu untuk Lihat Data */
+        .btn-clear { background: #dc3545; color: white; font-size: 11px; margin-top: 5px; }
+
+        /* MODAL / WINDOW DATA */
+        #data-modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 6000;
+            display: none; justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background: #fff; width: 85%; max-height: 70%; border-radius: 15px;
+            padding: 20px; overflow-y: auto; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            position: relative;
+        }
+        .modal-header { font-weight: bold; font-size: 18px; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+        .data-list { font-family: monospace; font-size: 13px; color: #333; line-height: 1.6; }
+        .btn-close-modal {
+            margin-top: 20px; width: 100%; padding: 12px; background: #222; color: white;
+            border: none; border-radius: 8px; font-weight: bold;
+        }
+
+        #toast {
+            position: absolute; top: 25%; left: 50%; transform: translate(-50%, -50%);
+            background: #fbff00; color: #000; padding: 15px 25px; border-radius: 10px;
+            z-index: 3000; display: none; font-weight: bold; font-size: 16px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.6);
+        }
+    </style>
+</head>
+<body>
+
+<div id="start-overlay">
+    <button class="btn-start" onclick="initApp()">🚀 MULAI TRACKING</button>
+</div>
+
+<div id="data-modal">
+    <div class="modal-content">
+        <div class="modal-header">📍 Daftar Koordinat</div>
+        <div id="list-container" class="data-list"></div>
+        <button class="btn-close-modal" onclick="closeModal()">TUTUP</button>
+    </div>
+</div>
+
+<div id="toast">📍 TITIK DISIMPAN!</div>
+<div class="status-bar" id="stat">Klik tombol mulai di atas...</div>
+
+<div id="map"></div>
+
+<div class="controls">
+    <button class="btn btn-wa" onclick="sendWA()">🟢 KIRIM DATA</button>
+    <button class="btn btn-download" onclick="exportData()">💾 SIMPAN TXT</button>
+    <button class="btn btn-view" onclick="viewData()">🔍 LIHAT DATA</button>
+    <button class="btn btn-clear" onclick="clearData()">⚠️ RESET</button>
+</div>
+
+<script>
+let savedCoords = JSON.parse(localStorage.getItem('myGpsLog')) || [];
+let currentPos = null;
+let map, marker;
+
+function initApp() {
+    document.getElementById('start-overlay').style.display = 'none';
+    map = L.map('map').setView([-2.5, 118], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    marker = L.circleMarker([0,0], { radius: 10, color: 'white', fillColor: '#007bff', fillOpacity: 1, weight: 3 }).addTo(map);
+    startTracking();
+}
+
+function startTracking() {
+    if (!navigator.geolocation) { alert("GPS tidak didukung!"); return; }
+    navigator.geolocation.watchPosition(
+        (pos) => {
+            currentPos = [pos.coords.latitude, pos.coords.longitude];
+            const latlng = new L.LatLng(currentPos[0], currentPos[1]);
+            marker.setLatLng(latlng);
+            map.setView(latlng, 17);
+            updateStatus();
+        },
+        (err) => { document.getElementById('stat').innerText = "Sinyal GPS Lemah..."; },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+}
+
+// Deteksi Ketuk 2x
+let lastTap = 0;
+document.addEventListener('touchend', function (e) {
+    // Jangan simpan titik jika modal sedang terbuka
+    if(document.getElementById('data-modal').style.display === 'flex') return;
+
+    let currentTime = new Date().getTime();
+    let tapLength = currentTime - lastTap;
+    if (tapLength < 300 && tapLength > 0) {
+        saveCoordinate();
+        e.preventDefault();
+    }
+    lastTap = currentTime;
+});
+
+function saveCoordinate() {
+    if (!currentPos) { alert("Tunggu GPS mengunci!"); return; }
+    const entry = `[${currentPos[0]}, ${currentPos[1]}]`;
+    savedCoords.push(entry);
+    localStorage.setItem('myGpsLog', JSON.stringify(savedCoords));
+    
+    const toast = document.getElementById('toast');
+    toast.style.display = 'block';
+    setTimeout(() => { toast.style.display = 'none'; }, 1000);
+    updateStatus();
+}
+
+function updateStatus() {
+    if(currentPos) {
+        document.getElementById('stat').innerHTML = 
+            `LAT: ${currentPos[0].toFixed(6)} <br> LNG: ${currentPos[1].toFixed(6)} <br> TOTAL: ${savedCoords.length} TITIK`;
+    }
+}
+
+// FUNGSI LIHAT DATA (OPEN MODAL)
+function viewData() {
+    const container = document.getElementById('list-container');
+    if (savedCoords.length === 0) {
+        container.innerHTML = "<em>Belum ada data tersimpan.</em>";
+    } else {
+        container.innerHTML = savedCoords.map((c, index) => `${index + 1}. ${c}`).join("<br>");
+    }
+    document.getElementById('data-modal').style.display = 'flex';
+}
+
+// FUNGSI TUTUP MODAL
+function closeModal() {
+    document.getElementById('data-modal').style.display = 'none';
+}
+
+function sendWA() {
+    if (savedCoords.length === 0) return alert("Belum ada data untuk dikirim.");
+    let textHeader = "*DATA KOORDINAT GPS*%0A------------------%0A";
+    let textBody = savedCoords.join("%0A");
+    let textFooter = "%0A------------------%0A_Sent from GPS-Coordinates-Adder_";
+    let urlWA = "https://wa.me/?text=" + textHeader + textBody + textFooter;
+    window.open(urlWA, '_blank');
+}
+
+function exportData() {
+    if (savedCoords.length === 0) return alert("Data kosong.");
+    const content = savedCoords.join(",\n");
+    const blob = new Blob([content], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = window.URL.createObjectURL(blob);
+    a.download = `GPS_LOG.txt`;
+    a.click();
+}
+
+function clearData() {
+    if (confirm("Reset semua data?")) {
+        localStorage.removeItem('myGpsLog');
+        location.reload();
+    }
+}
+</script>
+</body>
+</html>
